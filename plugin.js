@@ -53,7 +53,7 @@ export const meta = {
     en: "Grok Imagine image generation and editing",
     zh: "Grok Imagine 图片生成和编辑",
   },
-  version: "1.0.0",
+  version: "1.0.1",
   author: { name: "gorquan", url: "https://github.com/gorquan" },
   baseUrl: "https://api.x.ai",
   models: ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-pro"],
@@ -261,6 +261,12 @@ export function parseSubmitResponse(ctx, resp) {
   if (!delivered.length && !charged) result.immediate = { status: "FAILURE", reason: "xAI returned no images" };
   else result.immediate = { status: "SUCCESS", progress: "100%" };
   return result;
+}
+
+// Required by Task Plugin API v1. OpenAI Image requests complete immediately
+// and never enter the polling path.
+export function buildQueryRequest() {
+  throw new Error("xAI image protocol does not poll");
 }
 
 export function parseTaskResult() {
