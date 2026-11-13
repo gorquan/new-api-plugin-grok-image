@@ -59,7 +59,33 @@ export const meta = {
   models: ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-pro"],
   fetchMode: "per_task",
   upstreams: ["vendor", "new_api"],
-  usageSchema: IMAGE_USAGE_SCHEMA,
+  usageSchema: {
+    image_count: {
+      type: "number",
+      unit: "count",
+      unitLabel: { en: "image", zh: "张", "zh-TW": "張", fr: "image", ja: "枚", ru: "изображение", vi: "ảnh" },
+      description: { en: "Image generation unit price", zh: "图片生成单价" },
+    },
+    input_image_count: {
+      type: "number",
+      unit: "count",
+      unitLabel: { en: "image", zh: "张", "zh-TW": "張", fr: "image", ja: "枚", ru: "изображение", vi: "ảnh" },
+      description: { en: "Input image unit price", zh: "输入图片单价" },
+    },
+    resolution: {
+      enum: ["1k", "1.5k", "2k"],
+      description: { en: "Output image resolution", zh: "输出图片分辨率" },
+    },
+    quality: {
+      enum: ["low", "medium", "auto"],
+      description: { en: "Output image quality", zh: "输出图片质量" },
+    },
+    upstream_cost_usd: {
+      type: "number",
+      unit: "credit",
+      description: { en: "Upstream image cost unit price", zh: "上游图片费用单价" },
+    },
+  },
   usageExamples: [
     {
       label: "1k low",
