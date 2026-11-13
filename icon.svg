@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Grok Image">
+  <rect width="256" height="256" rx="56" fill="#050505"/>
+  <path d="M66 59h35l31 51 31-51h35l-48 76 48 62h-35l-31-40-31 40H66l48-62-48-76Z" fill="#fff"/>
+  <path d="M178 64h18v125h-18z" fill="#777" opacity=".75"/>
+  <circle cx="203" cy="48" r="12" fill="#fff"/>
+</svg>
