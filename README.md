@@ -22,7 +22,7 @@ An OpenAI Images API task plugin for xAI's Grok Imagine image generation and edi
 | `POST /v1/images/generations` | Text-to-image generation | `grok-imagine-image`, `grok-imagine-image-2.0`, `grok-imagine-image-pro` |
 | `POST /v1/images/edits` | Edit or compose input images | `grok-imagine-image`, `grok-imagine-image-2.0`, `grok-imagine-image-pro` |
 
-The gateway also serves these routes under the plugin prefix, for example `/gorquan_grok_image/v1/images/generations`.
+For deferred processing, POST JSON with `deferred: true` to `/gorquan_grok_image/v1/images/generations` or `/gorquan_grok_image/v1/images/edits`. Only URL output is supported. Poll `GET /gorquan_grok_image/v1/images/{request_id}` with the gateway ID from the receipt and a token belonging to the submitting user. Pending returns HTTP 202; terminal responses return HTTP 200 with `status: "done"` (`data` and vendor `usage` when present) or `status: "failed"` (`error`). The unprefixed POST routes are the host's synchronous Images endpoints.
 
 Supported request fields include `prompt`, `n`, `resolution`, `quality`, `aspect_ratio`, and `response_format`. Generation defaults to one `1k` image with low quality. Editing accepts URL, data URL, file-reference, and multipart image inputs.
 

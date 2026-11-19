@@ -19,7 +19,7 @@ locale: zh-CN
 | `POST /v1/images/generations` | 文生图 | `grok-imagine-image`、`grok-imagine-image-2.0`、`grok-imagine-image-pro` |
 | `POST /v1/images/edits` | 编辑或组合输入图片 | `grok-imagine-image`、`grok-imagine-image-2.0`、`grok-imagine-image-pro` |
 
-网关也会在插件前缀下提供这些接口，例如 `/gorquan_grok_image/v1/images/generations`。
+异步请求使用插件前缀：向 `POST /gorquan_grok_image/v1/images/generations` 或 `POST /gorquan_grok_image/v1/images/edits` 发送 JSON，指定 `deferred: true`。输出格式只支持 `url`。提交返回网关的 `request_id`；使用同一用户的令牌轮询 `GET /gorquan_grok_image/v1/images/{request_id}`。处理中返回 202 和 `status: "pending"`，结束返回 200 和 `status: "done"`（含 `data` 和上游提供的 `usage`）或 `status: "failed"`（含 `error`）。无前缀的两个 POST 是宿主同步接口，不用于提交异步任务。
 
 支持 `prompt`、`n`、`resolution`、`quality`、`aspect_ratio` 和 `response_format`。生成请求默认生成 1 张 `1k` 低质量图片。编辑支持 URL、data URL、文件引用和 multipart 图片输入。
 

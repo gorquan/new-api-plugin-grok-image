@@ -53,12 +53,17 @@ export const meta = {
     en: "Grok Imagine image generation and editing",
     zh: "Grok Imagine 图片生成和编辑",
   },
-  version: "1.0.1",
+  version: "1.1.0-rc.3",
   author: { name: "gorquan", url: "https://github.com/gorquan" },
   baseUrl: "https://api.x.ai",
   models: ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-pro"],
   fetchMode: "per_task",
   upstreams: ["vendor", "new_api"],
+  routes: [
+    { method: "POST", path: "/gorquan_grok_image/v1/images/generations", type: "submit", decode: "deferGeneration", render: "accepted" },
+    { method: "POST", path: "/gorquan_grok_image/v1/images/edits", type: "submit", decode: "deferEdit", render: "accepted" },
+    { method: "GET", path: "/gorquan_grok_image/v1/images/:task_id", type: "query", render: "poll" },
+  ],
   usageSchema: {
     image_count: {
       type: "number",
@@ -196,6 +201,13 @@ function imageRequest(source, identity, operation, files) {
     throw new Error("response_format must be url or b64_json");
 
   const request = { model: model, prompt: prompt, n: count, resolution: resolution, quality: quality };
+  if (body.deferred === true) {
+    if (body.response_format === "b64_json") throw new Error("deferred images require response_format=url");
+    request.deferred = true;
+  } else if (body.deferred !== undefined && body.deferred !== false) {
+    throw new Error("deferred must be a boolean");
+  }
+  if (body.response_format !== undefined) request.response_format = body.response_format;
   if (aspectRatio) request.aspect_ratio = aspectRatio;
   if (inputs.length === 1) request.image = inputs[0];
   if (inputs.length > 1) request.images = inputs;
@@ -236,14 +248,14 @@ function upstreamImageCost(body) {
   return Number.isFinite(ticks) && ticks >= 0 ? ticks / 10000000000 : 0;
 }
 
-function apiRoot(ctx) {
-  return ctx.baseUrl + (ctx.upstream && ctx.upstream.kind === "new_api" ? "/xai" : "");
+function apiRoot(ctx, deferred) {
+  return ctx.baseUrl + (ctx.upstream && ctx.upstream.kind === "new_api" ? (deferred ? "/gorquan_grok_image" : "/xai") : "");
 }
 
 export function buildSubmitRequest(ctx) {
   const request = imageRequest(ctx.requestBody || {}, ctx, ctx.action);
   return {
-    url: apiRoot(ctx) + (request.action === "image_edit" ? "/v1/images/edits" : "/v1/images/generations"),
+    url: apiRoot(ctx, request.body.deferred) + (request.action === "image_edit" ? "/v1/images/edits" : "/v1/images/generations"),
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: "Bearer " + ctx.apiKey },
     body: Object.assign({}, request.body, { model: ctx.upstreamModel || ctx.model }),
@@ -255,6 +267,10 @@ export function buildSubmitRequest(ctx) {
 export function parseSubmitResponse(ctx, resp) {
   const body = plainObject(resp.body);
   if (!body) throw new Error("invalid xAI image response");
+  if (ctx.requestBody && ctx.requestBody.deferred === true) {
+    if (typeof body.request_id !== "string" || !/^[A-Za-z0-9_-]+$/.test(body.request_id)) throw new Error("xAI did not return a deferred request_id");
+    return { taskId: body.request_id, taskData: { status: "pending" } };
+  }
   const delivered = imageEntries(body);
   const charged = upstreamImageCost(body) > 0;
   const result = { taskId: ctx.publicTaskId, taskData: body };
@@ -263,15 +279,44 @@ export function parseSubmitResponse(ctx, resp) {
   return result;
 }
 
-// Required by Task Plugin API v1. OpenAI Image requests complete immediately
-// and never enter the polling path.
-export function buildQueryRequest() {
-  throw new Error("xAI image protocol does not poll");
+export function buildQueryRequest(ctx) {
+  if (!ctx.taskId || !/^[A-Za-z0-9_-]+$/.test(ctx.taskId)) throw new Error("invalid deferred request_id");
+  return { method: "GET", url: apiRoot(ctx, true) + "/v1/images/" + ctx.taskId,
+    headers: { Accept: "application/json", Authorization: "Bearer " + ctx.apiKey } };
 }
 
-export function parseTaskResult() {
-  return { status: "SUCCESS" };
+export function parseTaskResult(ctx, body, response) {
+  if (!plainObject(body) || (response && (response.status < 200 || response.status >= 300))) return { status: "UNKNOWN" };
+  if (body.status === "pending") return { status: "IN_PROGRESS" };
+  if (body.status === "failed") return { status: "FAILURE", reason: trimmed(body.error && body.error.message) || "xAI image request failed" };
+  if (body.status !== "done") return { status: "UNKNOWN" };
+  if (!imageEntries(body).some(function (item) { return trimmed(item.url); })) return { status: "FAILURE", reason: "xAI returned no image URL" };
+  return { status: "SUCCESS", progress: "100%" };
 }
+
+function deferredIntent(ctx, operation) {
+  const body = ctx.body && ctx.body.kind === "json" && plainObject(ctx.body.value);
+  if (!body || body.deferred !== true) throw new Error("send a JSON body with deferred: true; use /v1/images for synchronous requests");
+  const request = imageRequest(body, { model: body.model }, operation);
+  return { kind: "submit", model: request.body.model, action: request.action, requestBody: request.body };
+}
+
+export const native = {
+  deferGeneration: function (ctx) { return deferredIntent(ctx, "generate"); },
+  deferEdit: function (ctx) { return deferredIntent(ctx, "edit"); },
+  accepted: function (ctx, task) { return { request_id: task.task_id }; },
+  poll: function (ctx, task) {
+    const id = task.task_id;
+    if (task.status === "FAILURE") {
+      const err = plainObject(task.data) && plainObject(task.data.error);
+      return { request_id: id, status: "failed", error: { code: (err && err.code) || "upstream_error", message: task.fail_reason || "Image request failed" } };
+    }
+    if (task.status !== "SUCCESS") return { __status: 202, __body: { request_id: id, status: "pending" } };
+    const result = { request_id: id, status: "done", data: imageEntries(task.data) };
+    if (plainObject(task.data.usage)) result.usage = task.data.usage;
+    return result;
+  },
+};
 
 export function extractUsage(ctx) {
   const request = imageRequest(ctx.requestBody || {}, ctx, ctx.action);
@@ -310,19 +355,31 @@ export const protocols = {
         if (files.some(function (file) { return file.field === "mask"; }) || source.mask !== undefined)
           throw new Error("mask is not supported");
       }
+      if (source.deferred === true || source.deferred === "true") throw new Error("use /gorquan_grok_image/v1/images/" + (ctx.operation === "edit" ? "edits" : "generations") + " for deferred requests");
+      if (ctx.body.kind === "multipart" && source.deferred === "false") source.deferred = false;
       const request = imageRequest(source, { model: ctx.model, upstreamModel: ctx.upstreamModel }, ctx.operation, files);
       return { kind: "submit", model: ctx.model, action: request.action, requestBody: request.body };
     },
     render: function (ctx, task) {
+      const body = ctx.body;
+      const format = body && body.kind === "json" ? body.value.response_format
+        : body && body.fields && body.fields.response_format && body.fields.response_format[0];
       const data = imageEntries(task.data).map(function (item) {
+        if (format === "b64_json" && !trimmed(item.b64_json)) throw new Error("xAI did not return the requested b64_json");
+        if (format === "url" && !trimmed(item.url)) throw new Error("xAI did not return the requested image URL");
         const entry = {};
         if (trimmed(item.url)) entry.url = item.url;
         if (trimmed(item.b64_json)) entry.b64_json = item.b64_json;
+        if (trimmed(item.mime_type)) entry.mime_type = item.mime_type;
         if (trimmed(item.revised_prompt)) entry.revised_prompt = item.revised_prompt;
         return entry;
       });
       if (!data.length) throw new Error("xAI returned no images");
-      return { created: task.created_at, data: data };
+      const result = { created: task.created_at, data: data };
+      // Keep xAI's measured cost available to API clients as well as the
+      // settlement hook. Do not synthesize usage when the vendor omitted it.
+      if (plainObject(task.data.usage)) result.usage = task.data.usage;
+      return result;
     },
   },
 };
