@@ -53,7 +53,7 @@ export const meta = {
     en: "Grok Imagine image generation and editing",
     zh: "Grok Imagine 图片生成和编辑",
   },
-  version: "1.1.0-rc.5",
+  version: "1.1.0",
   author: { name: "gorquan", url: "https://github.com/gorquan" },
   baseUrl: "https://api.x.ai",
   models: ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-pro"],
