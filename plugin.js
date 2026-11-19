@@ -53,7 +53,7 @@ export const meta = {
     en: "Grok Imagine image generation and editing",
     zh: "Grok Imagine 图片生成和编辑",
   },
-  version: "1.1.0-rc.3",
+  version: "1.1.0-rc.5",
   author: { name: "gorquan", url: "https://github.com/gorquan" },
   baseUrl: "https://api.x.ai",
   models: ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-pro"],
@@ -244,8 +244,11 @@ function imagePayloadCount(body) {
 
 function upstreamImageCost(body) {
   const usage = plainObject(body) && plainObject(body.usage) ? body.usage : null;
-  const ticks = usage ? Number(usage.cost_in_usd_ticks) : NaN;
-  return Number.isFinite(ticks) && ticks >= 0 ? ticks / 10000000000 : 0;
+  if (!usage) return null;
+  const raw = usage.cost_in_usd_ticks;
+  if (typeof raw !== "number" && !(typeof raw === "string" && /^\d+$/.test(raw))) return null;
+  const ticks = Number(raw);
+  return Number.isSafeInteger(ticks) && ticks >= 0 ? ticks / 10000000000 : null;
 }
 
 function apiRoot(ctx, deferred) {
@@ -321,18 +324,29 @@ export const native = {
 export function extractUsage(ctx) {
   const request = imageRequest(ctx.requestBody || {}, ctx, ctx.action);
   if (ctx.usagePurpose === "billing_ratios") return { image_count: request.body.n };
+  // Reserve using the validated vendor request and the published xAI image
+  // rates (https://docs.x.ai/developers/pricing). The retired pro slug is
+  // served by 2.0 at low quality. Use integer mills until the final conversion.
+  const legacy = request.body.model === "grok-imagine-image";
+  const medium = request.body.model === "grok-imagine-image-2.0" && request.body.quality === "medium";
+  const outputMills = legacy ? 20 : { "1k": 40, "1.5k": 50, "2k": 60 }[request.body.resolution] + (medium ? 20 : 0);
   return {
     image_count: request.body.n,
     input_image_count: request.inputCount,
     resolution: request.body.resolution,
     quality: request.body.quality,
-    upstream_cost_usd: 0,
+    upstream_cost_usd: (request.body.n * outputMills + request.inputCount * (legacy ? 2 : 10)) / 1000,
   };
 }
 
 export function extractUsageOnComplete(task, result, body) {
   if (!task || (task.action !== "image_generation" && task.action !== "image_edit")) return null;
-  return { image_count: imagePayloadCount(body), upstream_cost_usd: upstreamImageCost(body) };
+  const facts = {};
+  const count = imagePayloadCount(body);
+  if (count > 0 && count <= MAX_IMAGE_COUNT) facts.image_count = count;
+  const cost = upstreamImageCost(body);
+  if (cost !== null) facts.upstream_cost_usd = cost;
+  return facts;
 }
 
 export const protocols = {

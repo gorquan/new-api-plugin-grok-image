@@ -28,7 +28,9 @@ Supported request fields include `prompt`, `n`, `resolution`, `quality`, `aspect
 
 ## Billing
 
-The plugin reports the requested and returned image count, input image count, output resolution, output quality, and upstream cost. Configure the channel's image unit price for `image_count`; input image pricing, resolution, quality, and upstream cost can be priced separately with the plugin usage fields.
+On stock New API RC51, run `python3 install.py https://your-gateway.example --user-id 1` from this repository (use your administrator user ID). Enter a New API administrator access token when prompted. The installer activates the bundled plugin and adds missing provider rules through the gateway's management API, preserving configured prices. Then bind the channel and enter the xAI key there.
+
+Uploading `plugin.js` alone does not install prices on stock RC51. For manual setup the provider expression is `tier("base", u("upstream_cost_usd") * 1)` for each supported model. It reserves an estimate before submission, then charges xAI's measured cost for the whole task, with the site's group multiplier. An explicit zero is free; missing cost retains the reservation.
 
 ## Example
 

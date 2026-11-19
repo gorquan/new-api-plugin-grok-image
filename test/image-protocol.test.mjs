@@ -1,9 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildSubmitRequest, protocols, extractUsageOnComplete, native, parseSubmitResponse, buildQueryRequest, parseTaskResult } from "../plugin.js";
+import { buildSubmitRequest, protocols, extractUsage, extractUsageOnComplete, native, parseSubmitResponse, buildQueryRequest, parseTaskResult } from "../plugin.js";
 
 const image = protocols.openai_image;
 const model = "grok-imagine-image-2.0";
+test("reserve from the upstream model and normalized request, settle the whole task once", () => {
+  const images = Array.from({ length: 5 }, () => ({ url: "https://example.invalid/image" }));
+  const ctx = { action: "image_edit", model: "public-alias", upstreamModel: model, requestBody: { prompt: "Combine", images, n: 2, resolution: "2k" } };
+  assert.equal(extractUsage(ctx).upstream_cost_usd, 0.21);
+  assert.equal(extractUsage({ ...ctx, upstreamModel: "grok-imagine-image-pro" }).upstream_cost_usd, 0.17);
+  assert.equal(extractUsage({ ...ctx, upstreamModel: "grok-imagine-image" }).upstream_cost_usd, 0.05);
+  const data = [{ url: "a" }, { url: "b" }];
+  for (const ticks of [undefined, null, -1, "", false, "NaN"]) {
+    assert.deepEqual(extractUsageOnComplete(ctx, {}, { data, usage: { cost_in_usd_ticks: ticks } }), { image_count: 2 });
+  }
+  for (const [ticks, usd] of [["900000000", 0.09], [0, 0]]) {
+    assert.deepEqual(extractUsageOnComplete(ctx, {}, { data, usage: { cost_in_usd_ticks: ticks } }), { image_count: 2, upstream_cost_usd: usd });
+  }
+});
 for (const [operation, body] of [
   ["generate", { kind: "json", value: { prompt: "Blue square", response_format: "b64_json" } }],
   ["edit", { kind: "multipart", fields: { prompt: ["Change to red"], response_format: ["b64_json"] },
