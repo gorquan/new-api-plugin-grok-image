@@ -2,6 +2,7 @@ const IMAGE_MODELS = {
   "grok-imagine-image": {},
   "grok-imagine-image-2.0": {},
   "grok-imagine-image-pro": {},
+  "grok-imagine-image-quality": {},
 };
 
 const IMAGE_RESOLUTIONS = ["1k", "1.5k", "2k"];
@@ -12,7 +13,6 @@ const IMAGE_ASPECT_RATIOS = [
 ];
 const MAX_IMAGE_COUNT = 10;
 const MAX_IMAGE_INPUTS = 5;
-const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
 const IMAGE_UNIT_LABEL = {
   en: "image", zh: "张", "zh-TW": "張", fr: "image", ja: "枚", ru: "изображение", vi: "ảnh",
 };
@@ -53,10 +53,10 @@ export const meta = {
     en: "Grok Imagine image generation and editing",
     zh: "Grok Imagine 图片生成和编辑",
   },
-  version: "1.1.0",
+  version: "1.2.7",
   author: { name: "gorquan", url: "https://github.com/gorquan" },
   baseUrl: "https://api.x.ai",
-  models: ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-pro"],
+  models: Object.keys(IMAGE_MODELS),
   fetchMode: "per_task",
   upstreams: ["vendor", "new_api"],
   routes: [
@@ -101,11 +101,11 @@ export const meta = {
       facts: { image_count: 1, input_image_count: 1, resolution: "2k", quality: "medium", upstream_cost_usd: 0 },
     },
   ],
-  protocols: [{ name: "openai_image", models: ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-pro"] }],
+  protocols: [{ name: "openai_image", models: Object.keys(IMAGE_MODELS) }],
 };
 
 function trimmed(value) {
-  return String(value || "").trim();
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function plainObject(value) {
@@ -115,7 +115,7 @@ function plainObject(value) {
 function imageModel(identity) {
   const names = [identity && identity.upstreamModel, identity && identity.model].map(trimmed).filter(Boolean);
   for (const name of names) {
-    if (IMAGE_MODELS[name]) return name;
+    if (Object.hasOwn(IMAGE_MODELS, name)) return name;
   }
   throw new Error((names[0] || "model") + " is not a supported xAI image model");
 }
@@ -125,89 +125,98 @@ function imageAction(action) {
 }
 
 function imageInteger(value, name, minimum, maximum) {
-  const number = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
-  if (typeof number !== "number" || !Number.isInteger(number) || number < minimum || number > maximum)
+  if (!Number.isInteger(value) || value < minimum || value > maximum)
     throw new Error(name + " must be an integer between " + minimum + " and " + maximum);
-  return number;
+  return value;
 }
 
 function imageInput(value, name) {
   const object = plainObject(value);
-  if (object && object.__fileRef) return { url: object };
-  if (object && object.file_id !== undefined) throw new Error(name + " must be a URL; file_id is not supported");
-  const url = object && Object.prototype.hasOwnProperty.call(object, "url") ? object.url : value;
-  if (plainObject(url) && url.__fileRef) return { url: url };
-  if (typeof url === "string" && url.trim()) return { url: url.trim() };
-  throw new Error(name + " must be a URL or {url}");
-}
-
-function imageInputsFromBody(source, files) {
-  const inputs = [];
-  const add = function (value, name) {
-    if (Array.isArray(value)) {
-      value.forEach(function (item, index) {
-        inputs.push(imageInput(item, name + "[" + index + "]"));
-      });
-    } else if (value !== undefined && value !== null && value !== "") {
-      inputs.push(imageInput(value, name));
-    }
-  };
-
-  add(source.image, "image");
-  add(source["image[]"], "image[]");
-  add(source.images, "images");
-  for (const file of files || []) {
-    if (!/^image(\[\d*\])?$/.test(file.field)) throw new Error(file.field + " is not supported");
-    const mimeType = trimmed(file.mimeType).toLowerCase();
-    inputs.push({
-      url: {
-        __fileRef: file.ref,
-        encoding: "dataUrl",
-        mimeType: /^image\/[a-z0-9.+-]+$/.test(mimeType) ? mimeType : "image/png",
-        maxBytes: MAX_IMAGE_INPUT_BYTES,
-      },
-    });
+  if (!object) throw new Error(name + " must be an object with url, image_url or file_id");
+  if (object.file_id != null) {
+    if (!trimmed(object.file_id) || object.url != null || object.image_url != null)
+      throw new Error(name + " must have a non-empty file_id or a URL, not both");
+    return { file_id: object.file_id.trim() };
   }
-  if (inputs.length > MAX_IMAGE_INPUTS) throw new Error("xAI image edits support at most " + MAX_IMAGE_INPUTS + " input images");
-  return inputs;
+  if (object.url != null && object.image_url != null)
+    throw new Error(name + " must have only one URL");
+  const url = object.url ?? object.image_url;
+  if (typeof url === "string" && url.trim()) return { url: url.trim() };
+  throw new Error(name + " requires a non-empty url, image_url or file_id");
 }
 
-function imageRequest(source, identity, operation, files) {
+function imageInputsFromBody(source) {
+  if (source["image[]"] !== undefined) throw new Error("use image or images in the JSON body");
+  const images = source.images === undefined ? [] : source.images;
+  if (!Array.isArray(images)) throw new Error("images must be an array");
+  if (source.image != null) {
+    if (images.length) throw new Error("use image or images, not both");
+    return [imageInput(source.image, "image")];
+  }
+  if (images.length > MAX_IMAGE_INPUTS) throw new Error("xAI image edits support at most " + MAX_IMAGE_INPUTS + " input images");
+  return images.map((item, i) => imageInput(item, "images[" + i + "]"));
+}
+
+function imageRequest(source, identity, operation) {
   const body = plainObject(source);
   if (!body) throw new Error("request body must be an object");
   const model = imageModel(identity);
   const action = imageAction(operation);
-  const bodyFiles = files || [];
-  if (bodyFiles.some(function (file) { return file.field === "mask"; }) || (action === "image_edit" && body.mask !== undefined && body.mask !== null))
-    throw new Error("mask is not supported");
   if (body.size !== undefined && body.size !== null && body.size !== "")
     throw new Error("size is not supported by xAI image models; use aspect_ratio and resolution");
   if (body.stream === true || body.stream === "true") throw new Error("stream is not supported");
 
   const prompt = promptField(body, true);
-  const inputs = imageInputsFromBody(body, bodyFiles);
+  const inputs = imageInputsFromBody(body);
   if (action === "image_edit" && inputs.length === 0) throw new Error("image is required for xAI image edits");
   if (action === "image_generation" && inputs.length > 0) throw new Error("image inputs require the image edit endpoint");
 
-  const count = imageInteger(body.n === undefined || body.n === null || body.n === "" ? 1 : body.n, "n", 1, MAX_IMAGE_COUNT);
-  const resolution = body.resolution === undefined || body.resolution === null || body.resolution === "" ? "1k" : trimmed(body.resolution).toLowerCase();
+  const count = body.n ?? 1;
+  if (!Number.isInteger(count) || count < 1 || count > MAX_IMAGE_COUNT)
+    throw new Error("n must be a JSON integer between 1 and " + MAX_IMAGE_COUNT);
+  const resolution = body.resolution ?? "1k";
   if (!IMAGE_RESOLUTIONS.includes(resolution)) throw new Error("resolution must be one of " + IMAGE_RESOLUTIONS.join(", "));
-  let quality = body.quality === undefined || body.quality === null || body.quality === "" ? "" : trimmed(body.quality).toLowerCase();
-  if (!IMAGE_QUALITIES.includes(quality || "auto")) throw new Error("quality must be one of low, medium, or auto");
-  if (quality === "" || quality === "auto") quality = inputs.length > 0 ? "medium" : "low";
-  const aspectRatio = body.aspect_ratio === undefined || body.aspect_ratio === null || body.aspect_ratio === "" ? "" : trimmed(body.aspect_ratio);
-  if (aspectRatio && !IMAGE_ASPECT_RATIOS.includes(aspectRatio)) throw new Error("unsupported aspect_ratio for xAI image models: " + aspectRatio);
-  if (body.response_format !== undefined && body.response_format !== "url" && body.response_format !== "b64_json")
+  let quality = body.quality ?? "auto";
+  if (!IMAGE_QUALITIES.includes(quality)) throw new Error("quality must be one of low, medium, or auto");
+  if (quality === "auto") quality = inputs.length > 0 ? "medium" : "low";
+  const aspectRatio = body.aspect_ratio;
+  if (aspectRatio != null && !IMAGE_ASPECT_RATIOS.includes(aspectRatio)) throw new Error("unsupported aspect_ratio for xAI image models");
+  if (body.response_format != null && body.response_format !== "url" && body.response_format !== "b64_json")
     throw new Error("response_format must be url or b64_json");
 
   const request = { model: model, prompt: prompt, n: count, resolution: resolution, quality: quality };
+  if (action === "image_edit" && body.mask !== undefined) request.mask = body.mask;
+  if (body.user != null) {
+    if (typeof body.user !== "string") throw new Error("user must be a string");
+    request.user = body.user;
+  }
+  if (body.output != null) {
+    const urls = plainObject(body.output) && body.output.upload_urls;
+    if (!Array.isArray(urls) || (urls.length !== 0 && urls.length !== count) || !urls.every(u => typeof u === "string" && /^https?:\/\/\S+$/i.test(u)))
+      throw new Error("output.upload_urls must be empty or contain one upload URL per output image");
+    request.output = { upload_urls: urls };
+  }
+  if (body.storage_options != null) {
+    const s = plainObject(body.storage_options);
+    if (!s || !trimmed(s.filename)) throw new Error("storage_options.filename is required");
+    const storage = { filename: s.filename };
+    if (s.expires_after != null) storage.expires_after = imageInteger(s.expires_after, "storage_options.expires_after", 3600, 2592000);
+    if (typeof s.public_url === "boolean") storage.public_url = s.public_url;
+    else if (s.public_url !== undefined) {
+      if (!plainObject(s.public_url)) throw new Error("storage_options.public_url must be a boolean or object");
+      storage.public_url = {};
+      if (s.public_url.expires_after != null)
+        storage.public_url.expires_after = imageInteger(s.public_url.expires_after, "public_url.expires_after", 3600, 2592000);
+    }
+    request.storage_options = storage;
+  }
   if (body.deferred === true) {
     if (body.response_format === "b64_json") throw new Error("deferred images require response_format=url");
     request.deferred = true;
-  } else if (body.deferred !== undefined && body.deferred !== false) {
+  } else if (body.deferred != null && body.deferred !== false) {
     throw new Error("deferred must be a boolean");
   }
-  if (body.response_format !== undefined) request.response_format = body.response_format;
+  if (body.response_format != null) request.response_format = body.response_format;
   if (aspectRatio) request.aspect_ratio = aspectRatio;
   if (inputs.length === 1) request.image = inputs[0];
   if (inputs.length > 1) request.images = inputs;
@@ -221,17 +230,21 @@ function promptField(source, required) {
   return prompt;
 }
 
+function hasStorageResult(item) {
+  return !!(plainObject(item) && (trimmed(item.file_output && item.file_output.file_id) || trimmed(item.storage_error)));
+}
+
 function imageEntries(body) {
   const data = plainObject(body) ? body.data : null;
   const entries = Array.isArray(data) ? data : data ? [data] : [];
   return entries.filter(function (item) {
-    return plainObject(item) && (trimmed(item.url) || trimmed(item.b64_json));
+    return plainObject(item) && (trimmed(item.url) || trimmed(item.b64_json) || hasStorageResult(item));
   });
 }
 
 function imagePayloadCount(body) {
   const data = plainObject(body) ? body.data : null;
-  if (!Array.isArray(data)) return imageEntries(body).length;
+  if (!Array.isArray(data)) return plainObject(data) && (trimmed(data.url) || trimmed(data.b64_json)) ? 1 : 0;
   let urls = 0;
   let b64s = 0;
   for (const item of data) {
@@ -293,7 +306,9 @@ export function parseTaskResult(ctx, body, response) {
   if (body.status === "pending") return { status: "IN_PROGRESS" };
   if (body.status === "failed") return { status: "FAILURE", reason: trimmed(body.error && body.error.message) || "xAI image request failed" };
   if (body.status !== "done") return { status: "UNKNOWN" };
-  if (!imageEntries(body).some(function (item) { return trimmed(item.url); })) return { status: "FAILURE", reason: "xAI returned no image URL" };
+  // A positive vendor receipt settles even when no URL was delivered.
+  if (!imageEntries(body).some(function (item) { return trimmed(item.url) || hasStorageResult(item); }) && !(upstreamImageCost(body) > 0))
+    return { status: "FAILURE", reason: "xAI returned no image URL" };
   return { status: "SUCCESS", progress: "100%" };
 }
 
@@ -346,46 +361,37 @@ export function extractUsageOnComplete(task, result, body) {
   if (count > 0 && count <= MAX_IMAGE_COUNT) facts.image_count = count;
   const cost = upstreamImageCost(body);
   if (cost !== null) facts.upstream_cost_usd = cost;
+  // Returning storage metadata alone must not turn an uncharged, undelivered
+  // image into a charge at the reservation price. Leave the vendor receipt untouched.
+  else if (count === 0 && imageEntries(body).some(hasStorageResult)) facts.upstream_cost_usd = 0;
   return facts;
 }
 
 export const protocols = {
   openai_image: {
     decodeRequest: function (ctx) {
-      if (!ctx.body || (ctx.body.kind !== "json" && ctx.body.kind !== "multipart")) throw new Error("JSON or multipart body required");
-      let source;
-      let files = [];
-      if (ctx.body.kind === "json") {
-        source = plainObject(ctx.body.value);
-        if (!source) throw new Error("request body must be an object");
-      } else {
-        source = {};
-        const fields = ctx.body.fields || {};
-        for (const name of Object.keys(fields)) {
-          if (fields[name].length > 1 && name !== "image" && name !== "image[]") throw new Error(name + " must be provided once");
-          source[name] = fields[name].length === 1 ? fields[name][0] : fields[name];
-        }
-        files = ctx.body.files || [];
-        if (files.some(function (file) { return file.field === "mask"; }) || source.mask !== undefined)
-          throw new Error("mask is not supported");
-      }
+      if (!ctx.body || ctx.body.kind !== "json") throw new Error("xAI image requests require application/json");
+      const source = plainObject(ctx.body.value);
+      if (!source) throw new Error("request body must be an object");
       if (source.deferred === true || source.deferred === "true") throw new Error("use /gorquan_grok_image/v1/images/" + (ctx.operation === "edit" ? "edits" : "generations") + " for deferred requests");
-      if (ctx.body.kind === "multipart" && source.deferred === "false") source.deferred = false;
-      const request = imageRequest(source, { model: ctx.model, upstreamModel: ctx.upstreamModel }, ctx.operation, files);
+      const request = imageRequest(source, { model: ctx.model, upstreamModel: ctx.upstreamModel }, ctx.operation);
       return { kind: "submit", model: ctx.model, action: request.action, requestBody: request.body };
     },
     render: function (ctx, task) {
       const body = ctx.body;
-      const format = body && body.kind === "json" ? body.value.response_format
-        : body && body.fields && body.fields.response_format && body.fields.response_format[0];
+      const format = body && body.kind === "json" ? body.value.response_format : undefined;
       const data = imageEntries(task.data).map(function (item) {
-        if (format === "b64_json" && !trimmed(item.b64_json)) throw new Error("xAI did not return the requested b64_json");
-        if (format === "url" && !trimmed(item.url)) throw new Error("xAI did not return the requested image URL");
+        if (trimmed(item.url) || trimmed(item.b64_json)) {
+          if (format === "b64_json" && !trimmed(item.b64_json)) throw new Error("xAI did not return the requested b64_json");
+          if (format === "url" && !trimmed(item.url)) throw new Error("xAI did not return the requested image URL");
+        }
         const entry = {};
         if (trimmed(item.url)) entry.url = item.url;
         if (trimmed(item.b64_json)) entry.b64_json = item.b64_json;
         if (trimmed(item.mime_type)) entry.mime_type = item.mime_type;
         if (trimmed(item.revised_prompt)) entry.revised_prompt = item.revised_prompt;
+        if (plainObject(item.file_output)) entry.file_output = item.file_output;
+        if (typeof item.storage_error === "string") entry.storage_error = item.storage_error;
         return entry;
       });
       if (!data.length) throw new Error("xAI returned no images");
