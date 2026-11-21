@@ -1,10 +1,16 @@
 ---
 changelogVersion: 1
 plugin: "gorquan_grok_image"
-version: "1.2.7"
+version: "1.2.8"
 locale: "zh-CN"
 ---
 # Changelog
+
+## [1.2.8]
+
+### Fixed
+
+- 使用静态列表声明四个图片模型，让插件市场无需运行 JavaScript 即可读取模型和 Images 协议。
 
 ## [1.2.7]
 

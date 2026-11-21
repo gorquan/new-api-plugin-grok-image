@@ -1,12 +1,18 @@
 ---
 changelogVersion: 1
 plugin: "gorquan_grok_image"
-version: "1.2.7"
+version: "1.2.8"
 locale: "en"
 translations:
   zh-CN: CHANGELOG.zh-CN.md
 ---
 # Changelog
+
+## [1.2.8]
+
+### Fixed
+
+- Declare the four image models as literals so the marketplace can read the plugin metadata and Images protocol without running JavaScript.
 
 ## [1.2.7]
 

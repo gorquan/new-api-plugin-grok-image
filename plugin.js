@@ -53,10 +53,10 @@ export const meta = {
     en: "Grok Imagine image generation and editing",
     zh: "Grok Imagine 图片生成和编辑",
   },
-  version: "1.2.7",
+  version: "1.2.8",
   author: { name: "gorquan", url: "https://github.com/gorquan" },
   baseUrl: "https://api.x.ai",
-  models: Object.keys(IMAGE_MODELS),
+  models: ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-pro", "grok-imagine-image-quality"],
   fetchMode: "per_task",
   upstreams: ["vendor", "new_api"],
   routes: [
@@ -101,7 +101,7 @@ export const meta = {
       facts: { image_count: 1, input_image_count: 1, resolution: "2k", quality: "medium", upstream_cost_usd: 0 },
     },
   ],
-  protocols: [{ name: "openai_image", models: Object.keys(IMAGE_MODELS) }],
+  protocols: [{ name: "openai_image", models: ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-pro", "grok-imagine-image-quality"] }],
 };
 
 function trimmed(value) {
